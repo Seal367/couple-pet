@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>泡泡 - 我们的小世界</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ========== 登录页面 ========== -->
+  <div id="loginPage" class="page active">
+    <div class="login-container">
+      <div class="login-pet">
+        <canvas id="loginCanvas" width="200" height="200"></canvas>
+      </div>
+      <h1 class="login-title">我们的小世界</h1>
+      <p class="login-subtitle">和 TA 一起养的电子宠物 🐾</p>
+
+      <div id="loginForm">
+        <div class="input-group">
+          <input type="text" id="loginUsername" placeholder="设置一个昵称" maxlength="20" autocomplete="off">
+        </div>
+        <div class="input-group">
+          <input type="password" id="loginPassword" placeholder="密码（至少 4 位）" maxlength="50">
+        </div>
+        <button id="loginBtn" class="btn primary" onclick="handleLogin()">登 录</button>
+        <button class="btn secondary" onclick="showRegister()">注册新账号</button>
+      </div>
+
+      <div id="registerForm" style="display:none">
+        <div class="input-group">
+          <input type="text" id="regUsername" placeholder="设置一个昵称" maxlength="20" autocomplete="off">
+        </div>
+        <div class="input-group">
+          <input type="password" id="regPassword" placeholder="密码（至少 4 位）" maxlength="50">
+        </div>
+        <div class="input-group">
+          <input type="text" id="regDisplayName" placeholder="你的称呼（让 TA 看到的名字）" maxlength="20" autocomplete="off">
+        </div>
+        <button class="btn primary" onclick="handleRegister()">注册并开始 🌟</button>
+        <button class="btn secondary" onclick="showLogin()">已有账号？去登录</button>
+      </div>
+
+      <div id="linkForm" style="display:none">
+        <div class="link-success-icon">💕</div>
+        <p class="link-success-text">你的账号已创建！</p>
+        <p class="link-hint">分享下面的 <strong>伴侣码</strong> 给 TA，TA 注册时输入就能连接到你的小世界啦</p>
+        <div id="coupleCodeDisplay" class="couple-code">------</div>
+        <p class="link-hint">或者，如果你已有伴侣码，在这里输入：</p>
+        <div class="input-group">
+          <input type="text" id="linkCode" placeholder="输入 TA 的 6 位伴侣码" maxlength="6" style="text-transform:uppercase;letter-spacing:4px;text-align:center">
+        </div>
+        <button class="btn primary" onclick="handleLink()">连接 💞</button>
+        <button class="btn secondary" onclick="enterDashboard()">先进去看看 👀</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 主页面（宠物面板） ========== -->
+  <div id="dashboardPage" class="page">
+    <!-- 顶部栏 -->
+    <div class="top-bar">
+      <div class="top-left">
+        <span class="pet-name">泡泡</span>
+        <span class="partner-status" id="partnerStatus">
+          <span class="status-dot offline"></span>
+          <span id="partnerNameText">等待连接</span>
+        </span>
+      </div>
+      <button class="top-btn" onclick="handleLogout()" title="退出登录">🚪</button>
+    </div>
+
+    <!-- 宠物画布 -->
+    <div class="pet-stage">
+      <canvas id="petCanvas"></canvas>
+      <div id="actionMessage" class="action-message"></div>
+    </div>
+
+    <!-- 状态条 -->
+    <div class="stats-bar">
+      <div class="stat-item">
+        <span class="stat-icon">🍽️</span>
+        <div class="stat-track">
+          <div class="stat-fill" id="hungerFill" style="width:70%"></div>
+        </div>
+        <span class="stat-value" id="hungerValue">70</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-icon">❤️</span>
+        <div class="stat-track">
+          <div class="stat-fill happy" id="happyFill" style="width:70%"></div>
+        </div>
+        <span class="stat-value" id="happinessValue">70</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-icon">⚡</span>
+        <div class="stat-track">
+          <div class="stat-fill energy" id="energyFill" style="width:70%"></div>
+        </div>
+        <span class="stat-value" id="energyValue">70</span>
+      </div>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="action-buttons">
+      <button class="action-btn feed" onclick="doAction('feed')">
+        <span class="action-icon">🍼</span>
+        <span class="action-label">喂食</span>
+      </button>
+      <button class="action-btn pet" onclick="doAction('pet')">
+        <span class="action-icon">🤚</span>
+        <span class="action-label">摸摸</span>
+      </button>
+      <button class="action-btn play" onclick="doAction('play')">
+        <span class="action-icon">🎾</span>
+        <span class="action-label">玩耍</span>
+      </button>
+      <button class="action-btn sleep" id="sleepBtn" onclick="doAction('sleep')">
+        <span class="action-icon">😴</span>
+        <span class="action-label">睡觉</span>
+      </button>
+    </div>
+
+    <!-- 互动记录 -->
+    <div class="activity-feed">
+      <div class="feed-header">
+        <span>💬 小世界动态</span>
+      </div>
+      <div class="feed-list" id="feedList">
+        <div class="feed-empty">还没有互动，去摸摸泡泡吧~</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
