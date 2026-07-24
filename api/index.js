@@ -5,6 +5,9 @@ const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 const crypto = require('crypto');
 const path = require('path');
+const dns = require('dns');
+// 强制 IPv4 优先，解决 Vercel 环境连不上 Supabase 的问题
+dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
