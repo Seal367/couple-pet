@@ -3,48 +3,27 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
-const { EventEmitter } = require('events');
 
-// DNS 解析由 db.js 统一处理（自定义 DNS + IPv4 优先）
-
-const { getPool, getDbType, initDB } = require('../db');
+const { getPoolSync, getDbType, initDB } = require('../db');
 const { createSessionStore } = require('../session-store');
 
 const app = express();
-let pool;
-let dbType;
 
 // Vercel 前面有 HTTPS 代理，必须设置 trust proxy 才能正确处理 secure cookie
 app.set('trust proxy', 1);
+
+// ========== Pool 和 Session Store（模块加载时创建，确保在路由之前）==========
+// pg.Pool 构造函数是同步的，不连接网络；真正的连接在首次查询时建立
+const pool = getPoolSync();
+const dbType = getDbType();
 
 // ========== 中间件 ==========
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// 延迟会话存储：Pool 在首次请求时异步初始化，session 中间件在模块加载时注册（确保在路由之前）
-// Express 按注册顺序执行中间件，session 必须在路由之前！
-class LazySessionStore extends EventEmitter {
-  constructor() {
-    super();
-    this._real = null;
-  }
-  setReal(store) {
-    this._real = store;
-    if (store && typeof store.on === 'function') {
-      store.on('disconnect', (sid) => this.emit('disconnect', sid));
-    }
-  }
-  get(sid, cb) { return this._real ? this._real.get(sid, cb) : cb(null, null); }
-  set(sid, sess, cb) { return this._real ? this._real.set(sid, sess, cb) : cb(null); }
-  destroy(sid, cb) { return this._real ? this._real.destroy(sid, cb) : cb(null); }
-  touch(sid, sess, cb) { return this._real ? this._real.touch(sid, sess, cb) : cb(null); }
-}
-
-const lazyStore = new LazySessionStore();
-
-// Session 中间件必须在模块加载时注册，确保在路由处理器之前执行
+// Session 中间件必须在路由之前注册！用同步创建的 pool，无需 lazy store
 app.use(session({
-  store: lazyStore,
+  store: createSessionStore(pool, dbType),
   secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
   resave: false,
   saveUninitialized: false,
@@ -550,14 +529,11 @@ async function handler(req, res) {
   try {
     if (!initialized) {
       try {
-        pool = await getPool();
-        dbType = getDbType();
+        // 测试连接并初始化表（pool 和 session store 已在模块加载时创建）
+        const client = await pool.connect();
+        client.release();
         await initDB();
         console.log('✅ DB initialized successfully');
-
-        // 将真实的 session store 注入到模块加载时注册的 lazy store
-        lazyStore.setReal(createSessionStore(pool, dbType));
-        console.log('✅ Session store wired');
 
         initialized = true;
       } catch (err) {

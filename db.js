@@ -12,6 +12,66 @@ function getDbType() {
   return dbType;
 }
 
+// 同步创建 pool（不测试连接），用于 Vercel 模块加载时注册 session 中间件
+function getPoolSync() {
+  if (pool) return pool;
+
+  if (getDbType() === 'postgres') {
+    const { Pool } = require('pg');
+    const databaseUrl = process.env.DATABASE_URL;
+    const url = new URL(databaseUrl);
+
+    pool = new Pool({
+      host: url.hostname,
+      port: parseInt(url.port) || 5432,
+      database: url.pathname.slice(1),
+      user: decodeURIComponent(url.username),
+      password: decodeURIComponent(url.password),
+      family: 4,
+      ssl: process.env.NODE_ENV === 'production'
+        ? { rejectUnauthorized: false }
+        : false,
+      max: process.env.VERCEL ? 5 : undefined,
+      connectionTimeoutMillis: 15000,
+    });
+    return pool;
+  } else {
+    const Database = require('better-sqlite3');
+    const dbPath = path.join(__dirname, 'pet-local.db');
+    const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+
+    pool = {
+      _db: db,
+
+      async query(sql, params) {
+        try {
+          const normalized = sql.trim();
+          const upperSQL = normalized.toUpperCase();
+          if (upperSQL.startsWith('SELECT')) return _select(db, normalized, params);
+          if (upperSQL.startsWith('INSERT') || upperSQL.startsWith('WITH')) return _insert(db, normalized, params);
+          if (upperSQL.startsWith('UPDATE')) return _update(db, normalized, params);
+          if (upperSQL.startsWith('DELETE')) return _run(db, normalized, params);
+          const converted = pgToSQLite(normalized);
+          const statements = converted.split(';').map(s => s.trim()).filter(s => s);
+          for (const s of statements) { if (s) db.exec(s); }
+          return { rows: [], rowCount: 0 };
+        } catch (err) {
+          console.error('DB query error:', err.message, '| SQL:', sql.substring(0, 200));
+          throw err;
+        }
+      },
+
+      async connect() {
+        return { query: (...args) => pool.query(...args), release: () => {} };
+      },
+    };
+
+    return pool;
+  }
+}
+
 async function getPool() {
   if (pool) return pool;
   if (poolPromise) return poolPromise;
@@ -444,4 +504,4 @@ async function initDB() {
   }
 }
 
-module.exports = { getPool, getDbType, initDB };
+module.exports = { getPool, getPoolSync, getDbType, initDB };
