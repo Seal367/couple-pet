@@ -487,6 +487,30 @@ app.put('/api/pet/name', requireAuth, async (req, res) => {
   }
 });
 
+// ========== 健康检查 ==========
+app.get('/api/health', async (req, res) => {
+  try {
+    const dbType = getDbType();
+    const start = Date.now();
+    await pool.query('SELECT 1');
+    const latency = Date.now() - start;
+    res.json({
+      status: 'ok',
+      db: dbType,
+      latency_ms: latency,
+      vercel: !!process.env.VERCEL,
+      node: process.version,
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      db: getDbType(),
+      error: err.message,
+      code: err.code,
+    });
+  }
+});
+
 // ========== 全局错误处理 ==========
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message, err.stack);
