@@ -3,6 +3,7 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
+const { EventEmitter } = require('events');
 
 // DNS 解析由 db.js 统一处理（自定义 DNS + IPv4 优先）
 
@@ -19,6 +20,41 @@ app.set('trust proxy', 1);
 // ========== 中间件 ==========
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// 延迟会话存储：Pool 在首次请求时异步初始化，session 中间件在模块加载时注册（确保在路由之前）
+// Express 按注册顺序执行中间件，session 必须在路由之前！
+class LazySessionStore extends EventEmitter {
+  constructor() {
+    super();
+    this._real = null;
+  }
+  setReal(store) {
+    this._real = store;
+    if (store && typeof store.on === 'function') {
+      store.on('disconnect', (sid) => this.emit('disconnect', sid));
+    }
+  }
+  get(sid, cb) { return this._real ? this._real.get(sid, cb) : cb(null, null); }
+  set(sid, sess, cb) { return this._real ? this._real.set(sid, sess, cb) : cb(null); }
+  destroy(sid, cb) { return this._real ? this._real.destroy(sid, cb) : cb(null); }
+  touch(sid, sess, cb) { return this._real ? this._real.touch(sid, sess, cb) : cb(null); }
+}
+
+const lazyStore = new LazySessionStore();
+
+// Session 中间件必须在模块加载时注册，确保在路由处理器之前执行
+app.use(session({
+  store: lazyStore,
+  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+  },
+}));
 
 // ========== 认证中间件 ==========
 function requireAuth(req, res, next) {
@@ -247,7 +283,7 @@ app.get('/api/me', async (req, res) => {
     res.json({ user: result.rows[0] });
   } catch (err) {
     console.error('获取用户信息失败:', err);
-    res.json({ user: null });
+    res.status(500).json({ user: null, error: 'server_error' });
   }
 });
 
@@ -519,21 +555,9 @@ async function handler(req, res) {
         await initDB();
         console.log('✅ DB initialized successfully');
 
-        // Pool 就绪后才注册 session 中间件（确保 store 有真实数据库连接）
-        const realStore = createSessionStore(pool, dbType);
-        app.use(session({
-          store: realStore,
-          secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
-          resave: false,
-          saveUninitialized: false,
-          cookie: {
-            maxAge: 30 * 24 * 60 * 60 * 1000,
-            httpOnly: true,
-            secure: true,
-            sameSite: 'lax',
-          },
-        }));
-        console.log('✅ Session middleware configured');
+        // 将真实的 session store 注入到模块加载时注册的 lazy store
+        lazyStore.setReal(createSessionStore(pool, dbType));
+        console.log('✅ Session store wired');
 
         initialized = true;
       } catch (err) {

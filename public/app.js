@@ -59,13 +59,29 @@ function showLink(code) {
 }
 
 async function apiPut(url, data) {
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-    credentials: 'same-origin',
-  });
-  return res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      credentials: 'same-origin',
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { ...body, _status: res.status };
+    }
+    return res.json();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      return { error: '请求超时，请检查网络连接', _status: 0 };
+    }
+    return { error: '网络连接失败，请稍后重试', _status: 0 };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ========== 设置页 ==========
@@ -179,18 +195,49 @@ async function goToLinkPage() {
 
 // ========== API 请求 ==========
 async function apiPost(url, data) {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-    credentials: 'same-origin',
-  });
-  return res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      credentials: 'same-origin',
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { ...body, _status: res.status };
+    }
+    return res.json();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      return { error: '请求超时，请检查网络连接', _status: 0 };
+    }
+    return { error: '网络连接失败，请稍后重试', _status: 0 };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function apiGet(url) {
-  const res = await fetch(url, { credentials: 'same-origin' });
-  return res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { ...body, _status: res.status };
+    }
+    return res.json();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      return { error: '请求超时，请检查网络连接', _status: 0 };
+    }
+    return { error: '网络连接失败，请稍后重试', _status: 0 };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ========== 认证 ==========
@@ -950,6 +997,16 @@ async function init() {
       } else {
         enterDashboard();
       }
+    } else if (result.error === 'server_error') {
+      // 服务器错误，显示提示后进入登录页
+      showPage('loginPage');
+      showLogin();
+      showMessage('服务暂时不可用，请稍后再试吧~', 'error');
+    } else if (result.error) {
+      // 网络错误
+      showPage('loginPage');
+      showLogin();
+      showMessage(result.error, 'error');
     } else {
       showPage('loginPage');
       showLogin();

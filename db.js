@@ -392,6 +392,7 @@ async function initDB() {
         sess TEXT NOT NULL,
         expire TEXT NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_user_sessions_expire ON user_sessions (expire);
     `);
     console.log('✅ SQLite 数据库初始化完成');
   } else {
@@ -437,6 +438,7 @@ async function initDB() {
           sess JSON NOT NULL,
           expire TIMESTAMP(6) NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_user_sessions_expire ON user_sessions (expire);
       `);
     console.log('✅ PostgreSQL 数据库初始化完成');
   }
