@@ -692,6 +692,25 @@ function animatePet() {
 let dashboardInterval = null;
 let partnerCheckInterval = null;
 
+let authRedirected = false;
+
+function handleAuthError(result) {
+  if ((result._status === 401 || result.error === '请先登录 💕') && !authRedirected) {
+    authRedirected = true;
+    stopDashboardLoop();
+    showPage('loginPage');
+    showLogin();
+    showMessage('登录已过期，请重新登录', 'error');
+    return true;
+  }
+  return false;
+}
+
+// 重置标记（登录/注册成功后调用）
+function resetAuthRedirect() {
+  authRedirected = false;
+}
+
 function startDashboardLoop() {
   stopDashboardLoop();
 
@@ -722,6 +741,7 @@ function stopDashboardLoop() {
 async function refreshPetState() {
   try {
     const result = await apiGet(API.pet);
+    if (handleAuthError(result)) return;
     if (result.error) return;
 
     // 检查状态变化
@@ -796,6 +816,7 @@ async function refreshPetState() {
 async function refreshInteractions() {
   try {
     const result = await apiGet(API.interactions);
+    if (handleAuthError(result)) return;
     if (!Array.isArray(result)) return;
 
     const list = document.getElementById('feedList');
@@ -837,6 +858,7 @@ let partnerWasOnline = null;
 async function checkPartnerStatus() {
   try {
     const result = await apiGet(API.partner);
+    if (handleAuthError(result)) return;
     const dot = document.querySelector('.status-dot');
     const nameEl = document.getElementById('partnerNameText');
 
