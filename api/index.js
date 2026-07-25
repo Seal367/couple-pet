@@ -173,7 +173,7 @@ app.post('/api/login', async (req, res) => {
     });
   } catch (err) {
     console.error('登录失败:', err);
-    res.status(500).json({ error: '登录失败了，稍后再试试吧~' });
+    res.status(500).json({ error: '登录失败了，稍后再试试吧~', detail: err.message, code: err.code });
   }
 });
 

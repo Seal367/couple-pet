@@ -36,10 +36,15 @@ async function getPool() {
         connectionTimeoutMillis: 15000,
       });
 
-      // 测试连接
-      const client = await pool.connect();
-      client.release();
-      console.log('✅ PostgreSQL pool connected');
+      // 快速连接测试
+      try {
+        const client = await pool.connect();
+        client.release();
+        console.log('✅ PostgreSQL pool connected');
+      } catch (e) {
+        pool = null;
+        throw e;
+      }
       return pool;
     })();
     return poolPromise;
@@ -391,10 +396,8 @@ async function initDB() {
     console.log('✅ SQLite 数据库初始化完成');
   } else {
     const pgPool = await getPool();
-    const client = await pgPool.connect();
-    try {
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS couples (
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS couples (
           id SERIAL PRIMARY KEY,
           code VARCHAR(6) UNIQUE NOT NULL,
           created_at TIMESTAMP DEFAULT NOW()
@@ -435,10 +438,7 @@ async function initDB() {
           expire TIMESTAMP(6) NOT NULL
         );
       `);
-      console.log('✅ PostgreSQL 数据库初始化完成');
-    } finally {
-      client.release();
-    }
+    console.log('✅ PostgreSQL 数据库初始化完成');
   }
 }
 
