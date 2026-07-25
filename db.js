@@ -1,8 +1,36 @@
 // db.js — Database adapter: PostgreSQL (via pg) when DATABASE_URL is set, SQLite otherwise
 
 const dns = require('dns');
-dns.setDefaultResultOrder('ipv4first');
 const path = require('path');
+
+dns.setDefaultResultOrder('ipv4first');
+
+// 自定义 DNS 解析：使用公共 DNS 来解析 Supabase 主机名
+// Vercel 等 serverless 环境的内置 DNS 可能无法解析 supabase.co 域名
+(function setupCustomDNS() {
+  const { Resolver } = dns;
+  const customResolver = new Resolver();
+  customResolver.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+
+  const originalLookup = dns.lookup;
+  dns.lookup = function (hostname, options, callback) {
+    if (typeof hostname === 'string' && hostname.includes('supabase.co')) {
+      if (typeof options === 'function') { callback = options; options = {}; }
+      options = options || {};
+      const family = options.family || 0;
+      if (family === 0 || family === 4) {
+        return customResolver.resolve4(hostname, (err, addresses) => {
+          if (err) {
+            // 回退到系统 DNS
+            return originalLookup.call(dns, hostname, options, callback);
+          }
+          callback(null, addresses[0], 4);
+        });
+      }
+    }
+    return originalLookup.call(dns, hostname, options, callback);
+  };
+})();
 
 let pool = null;
 let dbType = null;
