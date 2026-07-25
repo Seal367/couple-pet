@@ -1,9 +1,6 @@
 // db.js — Database adapter: PostgreSQL (via pg) when DATABASE_URL is set, SQLite otherwise
 
-const dns = require('dns');
 const path = require('path');
-
-dns.setDefaultResultOrder('ipv4first');
 
 let pool = null;
 let dbType = null;
@@ -15,41 +12,6 @@ function getDbType() {
   return dbType;
 }
 
-// 用公共 DNS 预解析 Supabase 主机名 → IP，绕过 Vercel DNS 限制
-async function resolveSupabaseHost(databaseUrl) {
-  const url = new URL(databaseUrl);
-  const hostname = url.hostname;
-
-  // 不是 supabase 就直接返回原 hostname（本地/内网数据库不需要 DNS 预解析）
-  if (!hostname.includes('supabase.co') && !hostname.includes('supabase.com')) return hostname;
-
-  const { Resolver } = dns;
-  const resolver = new Resolver();
-  resolver.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
-
-  for (const server of ['8.8.8.8', '1.1.1.1', '8.8.4.4']) {
-    try {
-      resolver.setServers([server]);
-      const addresses = await new Promise((resolve, reject) => {
-        resolver.resolve4(hostname, (err, addrs) => {
-          if (err) reject(err);
-          else resolve(addrs);
-        });
-      });
-      if (addresses && addresses.length > 0) {
-        console.log(`[db.js] Resolved ${hostname} → ${addresses[0]} (via ${server})`);
-        return addresses[0];
-      }
-    } catch (e) {
-      // 这个 DNS 服务器不行，试下一个
-    }
-  }
-
-  // 全部失败，回退到原始 hostname
-  console.warn(`[db.js] Could not resolve ${hostname} via any DNS server, using hostname directly`);
-  return hostname;
-}
-
 async function getPool() {
   if (pool) return pool;
   if (poolPromise) return poolPromise;
@@ -59,21 +21,25 @@ async function getPool() {
       const { Pool } = require('pg');
       const databaseUrl = process.env.DATABASE_URL;
       const url = new URL(databaseUrl);
-      const host = await resolveSupabaseHost(databaseUrl);
 
       pool = new Pool({
-        host: host,
+        host: url.hostname,
         port: parseInt(url.port) || 5432,
         database: url.pathname.slice(1),
         user: decodeURIComponent(url.username),
         password: decodeURIComponent(url.password),
-        family: 4, // 强制 IPv4，避免 Vercel IPv6 DNS 问题
+        family: 4, // 仅 IPv4
         ssl: process.env.NODE_ENV === 'production'
           ? { rejectUnauthorized: false }
           : false,
         max: process.env.VERCEL ? 5 : undefined,
         connectionTimeoutMillis: 15000,
       });
+
+      // 测试连接
+      const client = await pool.connect();
+      client.release();
+      console.log('✅ PostgreSQL pool connected');
       return pool;
     })();
     return poolPromise;
@@ -101,7 +67,6 @@ async function getPool() {
           } else if (upperSQL.startsWith('DELETE')) {
             return _run(db, normalized, params);
           } else {
-            // DDL — multi-statement
             const converted = pgToSQLite(normalized);
             const statements = converted.split(';').map(s => s.trim()).filter(s => s);
             for (const s of statements) {
@@ -122,9 +87,9 @@ async function getPool() {
         };
       },
     };
-  }
 
-  return pool;
+    return pool;
+  }
 }
 
 // ─── SQLite query helpers ───────────────────────────────────────────
@@ -132,24 +97,18 @@ async function getPool() {
 function _params(params) {
   if (!params) return [];
   const arr = Array.isArray(params) ? params : [params];
-  // Convert booleans to integers (SQLite doesn't support boolean type)
   return arr.map(p => typeof p === 'boolean' ? (p ? 1 : 0) : p);
 }
 
-// Expand params: pg allows $1 to appear multiple times (same param reused),
-// but SQLite ? placeholders are positional. Duplicate params as needed.
 function expandParams(sql, params) {
   if (!params || params.length === 0) return [];
-  // Find all $n references and map them to their param index
   const refs = [];
   const re = /\$(\d+)/g;
   let m;
   while ((m = re.exec(sql)) !== null) {
-    refs.push(parseInt(m[1]) - 1); // $1 → index 0
+    refs.push(parseInt(m[1]) - 1);
   }
   if (refs.length === 0) return params;
-  // If ref count matches param count, likely no duplicates
-  // But we still need to handle the mapping correctly
   const result = refs.map(idx => _params(params)[idx]);
   return result;
 }
@@ -161,7 +120,6 @@ function _select(db, sql, params) {
   const rows = expandedParams.length > 0
     ? stmt.all(...expandedParams)
     : stmt.all();
-  // Massage rows
   const processed = rows.map(r => {
     const o = { ...r };
     if ('is_sleeping' in o) o.is_sleeping = !!o.is_sleeping;
@@ -176,12 +134,10 @@ function _select(db, sql, params) {
 function _insert(db, sql, params) {
   const upperSQL = sql.trim().toUpperCase();
 
-  // Handle CTE: WITH name AS (INSERT ... RETURNING ...) INSERT ... RETURNING ...
   if (upperSQL.startsWith('WITH')) {
     return _insertCTE(db, sql, _params(params));
   }
 
-  // Strip RETURNING clause (SQLite doesn't support it natively)
   let returningCols = null;
   let cleanSQL = sql;
   const retMatch = cleanSQL.match(/\s*RETURNING\s+(.+?)(?:\s*;?\s*)$/is);
@@ -190,7 +146,6 @@ function _insert(db, sql, params) {
     cleanSQL = cleanSQL.replace(/\s*RETURNING\s+.+$/is, '');
   }
 
-  // Simple INSERT
   const converted = pgToSQLite(cleanSQL);
   const stmt = db.prepare(converted);
   const info = _params(params).length > 0
@@ -212,14 +167,10 @@ function _insert(db, sql, params) {
   return { rows: [], rowCount: info.changes };
 }
 
-// Handle CTE (WITH ... INSERT) for SQLite
-// Approach: 1) Replace CTE subquery with placeholder, 2) Execute inserts sequentially, 3) Build RETURNING
 function _insertCTE(db, sql, params) {
-  // Extract CTE name
   const cteNameMatch = sql.match(/WITH\s+(\w+)\s+AS\s*\(/is);
   const cteName = cteNameMatch ? cteNameMatch[1] : 'new_couple';
 
-  // 1. Find all INSERT statements
   const insertPattern = /INSERT\s+INTO\s+(\w+)\s*\(([^)]*)\)\s*VALUES\s*\(/ig;
   const insertStarts = [];
   let m;
@@ -227,16 +178,15 @@ function _insertCTE(db, sql, params) {
     insertStarts.push({ table: m[1], cols: m[2], pos: m.index, afterValues: m.index + m[0].length });
   }
   if (insertStarts.length < 2) {
-    // Fallback
     const converted = pgToSQLite(sql.replace(/\s*RETURNING\s+.+$/is, ''));
     db.exec(converted);
     return { rows: [], rowCount: 0 };
   }
 
-  // First INSERT: extract values (no nested parens issue for couples table)
+  // First INSERT
   const firstIns = insertStarts[0];
   const firstAfter = sql.substring(firstIns.afterValues);
-  const firstCloseIdx = firstAfter.indexOf(')'); // simple — no nested parens
+  const firstCloseIdx = firstAfter.indexOf(')');
   const firstVals = firstAfter.substring(0, firstCloseIdx);
   const firstValsArr = firstVals.split(',').map(s => s.trim());
   const firstParamCount = firstValsArr.filter(v => v.startsWith('$')).length;
@@ -246,11 +196,10 @@ function _insertCTE(db, sql, params) {
   if (firstInfo.changes === 0) return { rows: [], rowCount: 0 };
   const cteId = firstInfo.lastInsertRowid;
 
-  // Second INSERT: may have nested parens from (SELECT ...)
+  // Second INSERT
   const secondIns = insertStarts[1];
   const secondAfter = sql.substring(secondIns.afterValues);
 
-  // Find the closing ")" of VALUES by counting paren depth
   let depth = 1;
   let valsEndIdx = 0;
   for (let i = 0; i < secondAfter.length; i++) {
@@ -262,32 +211,26 @@ function _insertCTE(db, sql, params) {
   }
   let secondVals = secondAfter.substring(0, valsEndIdx);
 
-  // Replace CTE subquery with ?
   secondVals = secondVals.replace(
     new RegExp(`\\(\\s*SELECT\\s+id\\s+FROM\\s+${cteName}\\s*\\)`, 'i'),
     '?'
   );
 
-  // Check for RETURNING clause after VALUES
   const afterVals = secondAfter.substring(valsEndIdx + 1);
   const retMatch = afterVals.match(/RETURNING\s+(.+)$/is);
   const retCols = retMatch ? retMatch[1].split(',').map(s => s.trim()) : null;
 
-  // Build second INSERT
   const secondSQL = `INSERT INTO ${secondIns.table} (${secondIns.cols}) VALUES (${secondVals})`;
   const secondSQLite = pgToSQLite(secondSQL);
 
-  // Count actual ? placeholders in the converted SQL
   const secondParamCount = (secondSQLite.match(/\?/g) || []).length;
   const remainingParams = params.slice(firstParamCount);
-  // remainingParams has (secondParamCount - 1) params; cteId fills the last slot
   const secondParams = [...remainingParams.slice(0, secondParamCount - 1), cteId];
 
   const secondInfo = db.prepare(secondSQLite).run(...secondParams);
   if (secondInfo.changes === 0) return { rows: [], rowCount: 0 };
   const outerId = secondInfo.lastInsertRowid;
 
-  // Build RETURNING response
   const row = {};
   if (retCols) {
     const colNames = secondIns.cols.split(',').map(s => s.trim());
@@ -324,22 +267,18 @@ function _run(db, sql, params) {
 
 // ─── SQL translation ────────────────────────────────────────────────
 
-// Replace GREATEST/LEAST with MAX/MIN using paren-depth counting
-// Handles nested parentheses like GREATEST(0, ROUND((expr)::numeric, 1))
 function replaceGreatLeast(sql, pgFunc, sqliteFunc) {
   const pattern = new RegExp(`${pgFunc}\\s*\\(`, 'gi');
   let result = sql;
   let match;
   while ((match = pattern.exec(result)) !== null) {
-    const openParen = match.index + match[0].length - 1; // position of '('
+    const openParen = match.index + match[0].length - 1;
 
-    // Find first argument (simple number)
     const afterOpen = result.substring(openParen + 1);
     const commaIdx = afterOpen.indexOf(',');
     if (commaIdx === -1) continue;
     const firstArg = afterOpen.substring(0, commaIdx).trim();
 
-    // From comma, find matching closing paren by counting depth
     let depth = 1;
     let closeIdx = -1;
     for (let i = commaIdx + 1; i < afterOpen.length; i++) {
@@ -355,7 +294,6 @@ function replaceGreatLeast(sql, pgFunc, sqliteFunc) {
     const fullMatch = result.substring(match.index, openParen + 2 + closeIdx);
     result = result.replace(fullMatch, `${sqliteFunc}(${firstArg}, ${secondArg})`);
 
-    // Reset since we modified the string
     pattern.lastIndex = 0;
   }
   return result;
@@ -364,10 +302,8 @@ function replaceGreatLeast(sql, pgFunc, sqliteFunc) {
 function pgToSQLite(sql) {
   let result = sql;
 
-  // Convert $1, $2, ... to ?
   result = result.replace(/\$(\d+)/g, '?');
 
-  // Data types
   result = result
     .replace(/SERIAL\s+PRIMARY\s+KEY/gi, 'INTEGER PRIMARY KEY AUTOINCREMENT')
     .replace(/\bSERIAL\b/gi, 'INTEGER')
@@ -379,33 +315,24 @@ function pgToSQLite(sql) {
     .replace(/TIMESTAMP\b(?!\()/gi, 'TEXT')
     .replace(/\bJSON\b/gi, 'TEXT');
 
-  // EXTRACT(EPOCH FROM (NOW() - col)) — MUST be before NOW() replacement
   result = result.replace(/EXTRACT\s*\(\s*EPOCH\s+FROM\s*\(\s*NOW\s*\(\s*\)\s*-\s*(\w+(?:\.\w+)?)\s*\)\s*\)/gi,
     "(unixepoch('now') - unixepoch($1))");
 
-  // NOW() — produce UTC ISO 8601 format that JS can parse unambiguously
   result = result.replace(/\bNOW\(\)/gi, "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')");
 
-  // to_char(col, 'HH24:MI')
   result = result.replace(/to_char\s*\(\s*([^,]+)\s*,\s*'HH24:MI'\s*\)/gi, "strftime('%H:%M', $1)");
 
-  // col + INTERVAL '8 hours'
   result = result.replace(/\(?(\w+\.)?(\w+)\s*\+\s*INTERVAL\s*'(\d+)\s*(\w+)'\)?/gi, (match, prefix, col, num, unit) => {
     return `datetime(${prefix || ''}${col}, '+${num} ${unit}')`;
   });
 
-  // GREATEST(a, expr) → MAX(a, expr) — with paren-depth counting for nested expressions
   result = replaceGreatLeast(result, 'GREATEST', 'MAX');
-  // LEAST(a, expr) → MIN(a, expr)
   result = replaceGreatLeast(result, 'LEAST', 'MIN');
 
-  // ROUND((expr)::numeric, N) → ROUND(expr, N)
   result = result.replace(/ROUND\s*\(\s*\(([^)]+)\)::numeric\s*,\s*(\d+)\s*\)/gi, 'ROUND($1, $2)');
 
-  // ::int / ::integer cast
   result = result.replace(/::int(eger)?\b/gi, '');
 
-  // ON CONFLICT DO NOTHING → (remove, SQLite doesn't support)
   result = result.replace(/\s+ON\s+CONFLICT\s+DO\s+NOTHING/gi, '');
 
   return result;
@@ -417,7 +344,8 @@ async function initDB() {
   const type = getDbType();
 
   if (type === 'sqlite') {
-    const db = getPool()._db;
+    const pg = await getPool();
+    const db = pg._db;
     db.exec(`
       CREATE TABLE IF NOT EXISTS couples (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -462,7 +390,7 @@ async function initDB() {
     `);
     console.log('✅ SQLite 数据库初始化完成');
   } else {
-    const pgPool = getPool();
+    const pgPool = await getPool();
     const client = await pgPool.connect();
     try {
       await client.query(`
