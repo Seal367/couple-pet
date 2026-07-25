@@ -487,16 +487,39 @@ app.put('/api/pet/name', requireAuth, async (req, res) => {
   }
 });
 
+// ========== 全局错误处理 ==========
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err.message, err.stack);
+  res.status(500).json({ error: '服务器出了点问题，稍后再试吧~' });
+});
+
 // ========== Vercel Serverless Handler ==========
 
 let initialized = false;
+let initError = null;
 
 async function handler(req, res) {
-  if (!initialized) {
-    await initDB();
-    initialized = true;
+  try {
+    if (!initialized) {
+      try {
+        await initDB();
+        initialized = true;
+        console.log('✅ DB initialized successfully');
+      } catch (err) {
+        initError = err;
+        console.error('❌ initDB failed:', err.message, err.stack);
+        initialized = true; // Don't retry
+        return res.status(500).json({ error: '数据库连接失败，请检查 DATABASE_URL 配置' });
+      }
+    }
+    if (initError) {
+      return res.status(500).json({ error: '数据库未连接，请检查配置' });
+    }
+    app(req, res);
+  } catch (err) {
+    console.error('Handler error:', err.message, err.stack);
+    res.status(500).json({ error: '服务器内部错误: ' + err.message });
   }
-  app(req, res);
 }
 
 module.exports = handler;
