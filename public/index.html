@@ -184,6 +184,22 @@
   <!-- 全局 Toast 提示 -->
   <div id="toast" class="toast"></div>
 
+  <!-- CloudBase JS SDK（CDN 加载，供未来匿名登录等扩展使用） -->
+  <script src="https://imgcache.qq.com/qcloud/tcbjs/latest/tcb.js"></script>
+  <script>
+    // CloudBase 匿名初始化
+    if (typeof tcb !== 'undefined') {
+      window._cloudbase = tcb.init({
+        env: 'wgy-d3g0tvat27f04902f',
+        region: 'ap-shanghai',
+        accessKey: 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImRkMGYzNWU1LWRjZmEtNGNjNC1iY2M5LTc1MWM5ZTE1OTEyYyJ9.eyJpc3MiOiJodHRwczovL3dneS1kM2cwdHZhdDI3ZjA0OTAyZi5hcC1zaGFuZ2hhaS50Y2ItYXBpLnRlbmNlbnRjbG91ZGFwaS5jb20iLCJzdWIiOiJhbm9uIiwiYXVkIjoid2d5LWQzZzB0dmF0MjdmMDQ5MDJmIiwiZXhwIjo0MDg4NjQ5MzgyLCJpYXQiOjE3ODQ5NjYxODIsIm5vbmNlIjoia2RpaTdVdjhTQ0t5dDNWeURkV01GZyIsImF0X2hhc2giOiJrZGlpN1V2OFNDS3l0M1Z5RGRXTUZnIiwibmFtZSI6IkFub255bW91cyIsInNjb3BlIjoiYW5vbnltb3VzIiwicHJvamVjdF9pZCI6IndneS1kM2cwdHZhdDI3ZjA0OTAyZiIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.9WfyIXHNBHvFS_326W87vHT2MiAKkCAZEcER5HPQUc4tu3prNqQCtuesZujmlfae6sLQZ3XXa7PU1v7YEK8RTiuE6LVpG0G2K3okZQhoDfzTZn981R-qKpJADTd03_vxwfKwpm3NrKZhd5erCsym3pWD0-rFlfQhQYukXQ95qcbeUTvOW63RXdCIw8gtmKymc-vE6R1ro-PD5brUHN07OjpDK9oYZFMfC-0fe7jCb-TWcuBoMQFWFpo397Awg7GEqP-0SMihNLiA6-1vdxfDyi__g7V0w7HSXIy-9dFqwdvL2PbHjSmptLKogKi-jq5GmUqxdcSFHRwmjQDBP6nV3A'
+      });
+      console.log('✅ CloudBase JS SDK 初始化成功');
+    } else {
+      console.warn('⚠️ CloudBase JS SDK CDN 未加载');
+    }
+  </script>
+
   <script src="app.js"></script>
 </body>
 </html>

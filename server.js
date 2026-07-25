@@ -4,8 +4,20 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
 
+require('dotenv').config();
+
 const { getPool, getDbType, initDB } = require('./db');
 const { createSessionStore } = require('./session-store');
+
+// CloudBase SDK 初始化（用于未来扩展：匿名认证、云函数调用等）
+let cloudbase = null;
+try {
+  cloudbase = require('./cloudbase').cloudbase;
+  console.log('✅ CloudBase SDK 初始化成功');
+} catch (err) {
+  console.warn('⚠️ CloudBase SDK 未加载:', err.message);
+  console.warn('  请确认 CLOUDBASE_SECRET_ID 和 CLOUDBASE_SECRET_KEY 已设置');
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;

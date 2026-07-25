@@ -3,5 +3,7 @@ node_modules/
 *.db
 *.db-shm
 *.db-wal
-.DS_Store
-SecretKey.csv
+.git/
+.gitignore
+DIAGNOSIS.md
+SOLUTION.md
