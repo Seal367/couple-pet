@@ -7,7 +7,8 @@ function createSessionStore(pool, dbType) {
     return new PgSession({
       pool,
       tableName: 'user_sessions',
-      createTableIfMissing: true,
+      createTableIfMissing: false, // 表已在 initDB() 中创建，避免 PgBouncer DDL 兼容问题
+      errorLog: (...args) => console.error('[session-store]', ...args),
     });
   }
 

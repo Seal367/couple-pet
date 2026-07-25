@@ -3,7 +3,6 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
-const { EventEmitter } = require('events');
 
 const { getPool, getDbType, initDB } = require('./db');
 const { createSessionStore } = require('./session-store');
@@ -11,52 +10,34 @@ const { createSessionStore } = require('./session-store');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.set('trust proxy', 1);
+
 // ========== 数据库连接 ==========
 let pool;
 let dbType;
 
-// 延迟会话存储：实现 EventEmitter 接口以满足 express-session 的 store.on('disconnect') 调用
-class LazySessionStore extends EventEmitter {
-  constructor() {
-    super();
-    this._real = null;
-  }
-  setReal(store) {
-    this._real = store;
-    if (store && typeof store.on === 'function') {
-      store.on('disconnect', (sid) => this.emit('disconnect', sid));
-    }
-  }
-  get(sid, cb) { return this._real ? this._real.get(sid, cb) : cb(null, null); }
-  set(sid, sess, cb) { return this._real ? this._real.set(sid, sess, cb) : cb(null); }
-  destroy(sid, cb) { return this._real ? this._real.destroy(sid, cb) : cb(null); }
-  touch(sid, sess, cb) { return this._real ? this._real.touch(sid, sess, cb) : cb(null); }
-}
-
-const lazyStore = new LazySessionStore();
-
 async function start() {
   pool = await getPool();
   dbType = getDbType();
-  lazyStore.setReal(createSessionStore(pool, dbType));
+  await initDB();
 
-// ========== 中间件 ==========
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+  // ========== 中间件 ==========
+  app.use(express.json());
+  app.use(express.static(path.join(__dirname, 'public')));
 
-// 会话管理
-app.use(session({
-  store: lazyStore,
-  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 天
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-  },
-}));
+  // 会话管理 — pool 就绪后才注册
+  app.use(session({
+    store: createSessionStore(pool, dbType),
+    secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 天
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    },
+  }));
 
 // ========== 数据库初始化（委托给 db.js） ==========
 // initDB() is imported from ./db.js
@@ -571,7 +552,6 @@ app.put('/api/pet/name', requireAuth, async (req, res) => {
 // ========== 🚀 启动 ==========
 
   try {
-    await initDB();
     const server = app.listen(PORT, () => {
       console.log(`\n🌟 电子宠物服务器启动成功！`);
       console.log(`  地址: http://localhost:${PORT}`);

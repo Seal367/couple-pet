@@ -13,6 +13,9 @@ const app = express();
 let pool;
 let dbType;
 
+// Vercel 前面有 HTTPS 代理，必须设置 trust proxy 才能正确处理 secure cookie
+app.set('trust proxy', 1);
+
 // ========== 中间件 ==========
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
