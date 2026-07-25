@@ -3,7 +3,6 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
-const { EventEmitter } = require('events');
 
 // DNS 解析由 db.js 统一处理（自定义 DNS + IPv4 优先）
 
@@ -17,40 +16,6 @@ let dbType;
 // ========== 中间件 ==========
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
-
-// 延迟会话存储：实现 EventEmitter 接口以满足 express-session 的 store.on('disconnect') 调用
-class LazySessionStore extends EventEmitter {
-  constructor() {
-    super();
-    this._real = null;
-  }
-  setReal(store) {
-    this._real = store;
-    // 转发真实 store 的 disconnect 事件
-    if (store && typeof store.on === 'function') {
-      store.on('disconnect', (sid) => this.emit('disconnect', sid));
-    }
-  }
-  get(sid, cb) { return this._real ? this._real.get(sid, cb) : cb(null, null); }
-  set(sid, sess, cb) { return this._real ? this._real.set(sid, sess, cb) : cb(null); }
-  destroy(sid, cb) { return this._real ? this._real.destroy(sid, cb) : cb(null); }
-  touch(sid, sess, cb) { return this._real ? this._real.touch(sid, sess, cb) : cb(null); }
-}
-
-const lazyStore = new LazySessionStore();
-
-app.use(session({
-  store: lazyStore,
-  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    maxAge: 30 * 24 * 60 * 60 * 1000,
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
-  },
-}));
 
 // ========== 认证中间件 ==========
 function requireAuth(req, res, next) {
@@ -549,19 +514,42 @@ async function handler(req, res) {
         pool = await getPool();
         dbType = getDbType();
         await initDB();
-        // 替换占位 store 为真正的 session store
-        lazyStore.setReal(createSessionStore(pool, dbType));
-        initialized = true;
         console.log('✅ DB initialized successfully');
+
+        // Pool 就绪后才注册 session 中间件（确保 store 有真实数据库连接）
+        const realStore = createSessionStore(pool, dbType);
+        app.use(session({
+          store: realStore,
+          secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+          resave: false,
+          saveUninitialized: false,
+          cookie: {
+            maxAge: 30 * 24 * 60 * 60 * 1000,
+            httpOnly: true,
+            secure: true,
+            sameSite: 'lax',
+          },
+        }));
+        console.log('✅ Session middleware configured');
+
+        initialized = true;
       } catch (err) {
         initError = err;
         console.error('❌ initDB failed:', err.message, err.stack);
         initialized = true;
-        return res.status(500).json({ error: '数据库连接失败，请检查 DATABASE_URL 配置' });
+        return res.status(500).json({
+          error: '数据库连接失败',
+          detail: err.message,
+          code: err.code,
+        });
       }
     }
     if (initError) {
-      return res.status(500).json({ error: '数据库未连接，请检查配置' });
+      return res.status(500).json({
+        error: '数据库未连接',
+        detail: initError.message,
+        code: initError.code,
+      });
     }
     app(req, res);
   } catch (err) {

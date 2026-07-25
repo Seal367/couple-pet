@@ -20,8 +20,8 @@ async function resolveSupabaseHost(databaseUrl) {
   const url = new URL(databaseUrl);
   const hostname = url.hostname;
 
-  // 不是 supabase 就直接返回原 hostname
-  if (!hostname.includes('supabase.co')) return hostname;
+  // 不是 supabase 就直接返回原 hostname（本地/内网数据库不需要 DNS 预解析）
+  if (!hostname.includes('supabase.co') && !hostname.includes('supabase.com')) return hostname;
 
   const { Resolver } = dns;
   const resolver = new Resolver();
@@ -67,11 +67,12 @@ async function getPool() {
         database: url.pathname.slice(1),
         user: decodeURIComponent(url.username),
         password: decodeURIComponent(url.password),
+        family: 4, // 强制 IPv4，避免 Vercel IPv6 DNS 问题
         ssl: process.env.NODE_ENV === 'production'
           ? { rejectUnauthorized: false }
           : false,
         max: process.env.VERCEL ? 5 : undefined,
-        connectionTimeoutMillis: 10000,
+        connectionTimeoutMillis: 15000,
       });
       return pool;
     })();
