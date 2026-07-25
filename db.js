@@ -5,35 +5,9 @@ const path = require('path');
 
 dns.setDefaultResultOrder('ipv4first');
 
-// 自定义 DNS 解析：使用公共 DNS 来解析 Supabase 主机名
-// Vercel 等 serverless 环境的内置 DNS 可能无法解析 supabase.co 域名
-(function setupCustomDNS() {
-  const { Resolver } = dns;
-  const customResolver = new Resolver();
-  customResolver.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
-
-  const originalLookup = dns.lookup;
-  dns.lookup = function (hostname, options, callback) {
-    if (typeof hostname === 'string' && hostname.includes('supabase.co')) {
-      if (typeof options === 'function') { callback = options; options = {}; }
-      options = options || {};
-      const family = options.family || 0;
-      if (family === 0 || family === 4) {
-        return customResolver.resolve4(hostname, (err, addresses) => {
-          if (err) {
-            // 回退到系统 DNS
-            return originalLookup.call(dns, hostname, options, callback);
-          }
-          callback(null, addresses[0], 4);
-        });
-      }
-    }
-    return originalLookup.call(dns, hostname, options, callback);
-  };
-})();
-
 let pool = null;
 let dbType = null;
+let poolPromise = null;
 
 function getDbType() {
   if (dbType) return dbType;
@@ -41,20 +15,67 @@ function getDbType() {
   return dbType;
 }
 
-function getPool() {
+// 用公共 DNS 预解析 Supabase 主机名 → IP，绕过 Vercel DNS 限制
+async function resolveSupabaseHost(databaseUrl) {
+  const url = new URL(databaseUrl);
+  const hostname = url.hostname;
+
+  // 不是 supabase 就直接返回原 hostname
+  if (!hostname.includes('supabase.co')) return hostname;
+
+  const { Resolver } = dns;
+  const resolver = new Resolver();
+  resolver.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+
+  for (const server of ['8.8.8.8', '1.1.1.1', '8.8.4.4']) {
+    try {
+      resolver.setServers([server]);
+      const addresses = await new Promise((resolve, reject) => {
+        resolver.resolve4(hostname, (err, addrs) => {
+          if (err) reject(err);
+          else resolve(addrs);
+        });
+      });
+      if (addresses && addresses.length > 0) {
+        console.log(`[db.js] Resolved ${hostname} → ${addresses[0]} (via ${server})`);
+        return addresses[0];
+      }
+    } catch (e) {
+      // 这个 DNS 服务器不行，试下一个
+    }
+  }
+
+  // 全部失败，回退到原始 hostname
+  console.warn(`[db.js] Could not resolve ${hostname} via any DNS server, using hostname directly`);
+  return hostname;
+}
+
+async function getPool() {
   if (pool) return pool;
+  if (poolPromise) return poolPromise;
 
   if (getDbType() === 'postgres') {
-    const { Pool } = require('pg');
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.NODE_ENV === 'production'
-        ? { rejectUnauthorized: false }
-        : false,
-      max: process.env.VERCEL ? 5 : undefined,
-      connectionTimeoutMillis: 10000,
-    });
-    // Pass through — pg Pool already has query()
+    poolPromise = (async () => {
+      const { Pool } = require('pg');
+      const databaseUrl = process.env.DATABASE_URL;
+      const url = new URL(databaseUrl);
+      const host = await resolveSupabaseHost(databaseUrl);
+
+      pool = new Pool({
+        host: host,
+        port: parseInt(url.port) || 5432,
+        database: url.pathname.slice(1),
+        user: decodeURIComponent(url.username),
+        password: decodeURIComponent(url.password),
+        ssl: process.env.NODE_ENV === 'production'
+          ? { rejectUnauthorized: false }
+          : false,
+        max: process.env.VERCEL ? 5 : undefined,
+        connectionTimeoutMillis: 10000,
+      });
+      return pool;
+    })();
+    return poolPromise;
   } else {
     const Database = require('better-sqlite3');
     const dbPath = path.join(__dirname, 'pet-local.db');

@@ -10,15 +10,24 @@ const { getPool, getDbType, initDB } = require('../db');
 const { createSessionStore } = require('../session-store');
 
 const app = express();
-const pool = getPool();
-const dbType = getDbType();
+let pool;
+let dbType;
 
 // ========== 中间件 ==========
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
+// 延迟会话存储：在 pool 就绪前先占位，首次请求时自动初始化
+let _realStore = null;
+const lazyStore = {
+  get(sid, cb) { return _realStore ? _realStore.get(sid, cb) : cb(null, null); },
+  set(sid, sess, cb) { return _realStore ? _realStore.set(sid, sess, cb) : cb(null); },
+  destroy(sid, cb) { return _realStore ? _realStore.destroy(sid, cb) : cb(null); },
+  touch(sid, sess, cb) { return _realStore ? _realStore.touch(sid, sess, cb) : cb(null); },
+};
+
 app.use(session({
-  store: createSessionStore(pool, dbType),
+  store: lazyStore,
   secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
   resave: false,
   saveUninitialized: false,
@@ -524,13 +533,17 @@ async function handler(req, res) {
   try {
     if (!initialized) {
       try {
+        pool = await getPool();
+        dbType = getDbType();
         await initDB();
+        // 替换占位 store 为真正的 session store
+        _realStore = createSessionStore(pool, dbType);
         initialized = true;
         console.log('✅ DB initialized successfully');
       } catch (err) {
         initError = err;
         console.error('❌ initDB failed:', err.message, err.stack);
-        initialized = true; // Don't retry
+        initialized = true;
         return res.status(500).json({ error: '数据库连接失败，请检查 DATABASE_URL 配置' });
       }
     }

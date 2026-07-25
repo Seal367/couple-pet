@@ -11,8 +11,20 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ========== 数据库连接 ==========
-const pool = getPool();
-const dbType = getDbType();
+let pool;
+let dbType;
+let _realStore = null;
+const lazyStore = {
+  get(sid, cb) { return _realStore ? _realStore.get(sid, cb) : cb(null, null); },
+  set(sid, sess, cb) { return _realStore ? _realStore.set(sid, sess, cb) : cb(null); },
+  destroy(sid, cb) { return _realStore ? _realStore.destroy(sid, cb) : cb(null); },
+  touch(sid, sess, cb) { return _realStore ? _realStore.touch(sid, sess, cb) : cb(null); },
+};
+
+async function start() {
+  pool = await getPool();
+  dbType = getDbType();
+  _realStore = createSessionStore(pool, dbType);
 
 // ========== 中间件 ==========
 app.use(express.json());
@@ -20,7 +32,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // 会话管理
 app.use(session({
-  store: createSessionStore(pool, dbType),
+  store: lazyStore,
   secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
   resave: false,
   saveUninitialized: false,
@@ -544,7 +556,6 @@ app.put('/api/pet/name', requireAuth, async (req, res) => {
 
 // ========== 🚀 启动 ==========
 
-async function start() {
   try {
     await initDB();
     const server = app.listen(PORT, () => {
@@ -563,7 +574,7 @@ async function start() {
       process.exit(1);
     });
   } catch (err) {
-    console.error('❌ 数据库初始化失败:', err.message);
+    console.error('❌ 启动失败:', err.message);
     process.exit(1);
   }
 }
