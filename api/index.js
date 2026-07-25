@@ -3,6 +3,7 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
+const { EventEmitter } = require('events');
 
 // DNS 解析由 db.js 统一处理（自定义 DNS + IPv4 优先）
 
@@ -17,14 +18,26 @@ let dbType;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// 延迟会话存储：在 pool 就绪前先占位，首次请求时自动初始化
-let _realStore = null;
-const lazyStore = {
-  get(sid, cb) { return _realStore ? _realStore.get(sid, cb) : cb(null, null); },
-  set(sid, sess, cb) { return _realStore ? _realStore.set(sid, sess, cb) : cb(null); },
-  destroy(sid, cb) { return _realStore ? _realStore.destroy(sid, cb) : cb(null); },
-  touch(sid, sess, cb) { return _realStore ? _realStore.touch(sid, sess, cb) : cb(null); },
-};
+// 延迟会话存储：实现 EventEmitter 接口以满足 express-session 的 store.on('disconnect') 调用
+class LazySessionStore extends EventEmitter {
+  constructor() {
+    super();
+    this._real = null;
+  }
+  setReal(store) {
+    this._real = store;
+    // 转发真实 store 的 disconnect 事件
+    if (store && typeof store.on === 'function') {
+      store.on('disconnect', (sid) => this.emit('disconnect', sid));
+    }
+  }
+  get(sid, cb) { return this._real ? this._real.get(sid, cb) : cb(null, null); }
+  set(sid, sess, cb) { return this._real ? this._real.set(sid, sess, cb) : cb(null); }
+  destroy(sid, cb) { return this._real ? this._real.destroy(sid, cb) : cb(null); }
+  touch(sid, sess, cb) { return this._real ? this._real.touch(sid, sess, cb) : cb(null); }
+}
+
+const lazyStore = new LazySessionStore();
 
 app.use(session({
   store: lazyStore,
@@ -537,7 +550,7 @@ async function handler(req, res) {
         dbType = getDbType();
         await initDB();
         // 替换占位 store 为真正的 session store
-        _realStore = createSessionStore(pool, dbType);
+        lazyStore.setReal(createSessionStore(pool, dbType));
         initialized = true;
         console.log('✅ DB initialized successfully');
       } catch (err) {

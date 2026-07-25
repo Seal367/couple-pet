@@ -3,6 +3,7 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
+const { EventEmitter } = require('events');
 
 const { getPool, getDbType, initDB } = require('./db');
 const { createSessionStore } = require('./session-store');
@@ -13,18 +14,31 @@ const PORT = process.env.PORT || 3000;
 // ========== 数据库连接 ==========
 let pool;
 let dbType;
-let _realStore = null;
-const lazyStore = {
-  get(sid, cb) { return _realStore ? _realStore.get(sid, cb) : cb(null, null); },
-  set(sid, sess, cb) { return _realStore ? _realStore.set(sid, sess, cb) : cb(null); },
-  destroy(sid, cb) { return _realStore ? _realStore.destroy(sid, cb) : cb(null); },
-  touch(sid, sess, cb) { return _realStore ? _realStore.touch(sid, sess, cb) : cb(null); },
-};
+
+// 延迟会话存储：实现 EventEmitter 接口以满足 express-session 的 store.on('disconnect') 调用
+class LazySessionStore extends EventEmitter {
+  constructor() {
+    super();
+    this._real = null;
+  }
+  setReal(store) {
+    this._real = store;
+    if (store && typeof store.on === 'function') {
+      store.on('disconnect', (sid) => this.emit('disconnect', sid));
+    }
+  }
+  get(sid, cb) { return this._real ? this._real.get(sid, cb) : cb(null, null); }
+  set(sid, sess, cb) { return this._real ? this._real.set(sid, sess, cb) : cb(null); }
+  destroy(sid, cb) { return this._real ? this._real.destroy(sid, cb) : cb(null); }
+  touch(sid, sess, cb) { return this._real ? this._real.touch(sid, sess, cb) : cb(null); }
+}
+
+const lazyStore = new LazySessionStore();
 
 async function start() {
   pool = await getPool();
   dbType = getDbType();
-  _realStore = createSessionStore(pool, dbType);
+  lazyStore.setReal(createSessionStore(pool, dbType));
 
 // ========== 中间件 ==========
 app.use(express.json());

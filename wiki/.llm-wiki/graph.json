@@ -1,0 +1,28 @@
+{
+  "nodes": [
+    {"id": "couple-pet-overview", "type": "concept", "title": "泡泡 Overview", "group": "core"},
+    {"id": "couple-pet-architecture", "type": "concept", "title": "Architecture", "group": "backend"},
+    {"id": "couple-pet-database", "type": "concept", "title": "Database", "group": "data"},
+    {"id": "couple-pet-api", "type": "concept", "title": "API", "group": "backend"},
+    {"id": "couple-pet-frontend", "type": "concept", "title": "Frontend", "group": "frontend"},
+    {"id": "couple-pet-pet-mechanics", "type": "concept", "title": "Pet Mechanics", "group": "design"},
+    {"id": "couple-pet-deployment", "type": "concept", "title": "Deployment", "group": "ops"}
+  ],
+  "edges": [
+    {"source": "couple-pet-overview", "target": "couple-pet-architecture"},
+    {"source": "couple-pet-overview", "target": "couple-pet-database"},
+    {"source": "couple-pet-overview", "target": "couple-pet-api"},
+    {"source": "couple-pet-overview", "target": "couple-pet-frontend"},
+    {"source": "couple-pet-overview", "target": "couple-pet-pet-mechanics"},
+    {"source": "couple-pet-overview", "target": "couple-pet-deployment"},
+    {"source": "couple-pet-architecture", "target": "couple-pet-database"},
+    {"source": "couple-pet-architecture", "target": "couple-pet-api"},
+    {"source": "couple-pet-architecture", "target": "couple-pet-frontend"},
+    {"source": "couple-pet-architecture", "target": "couple-pet-deployment"},
+    {"source": "couple-pet-database", "target": "couple-pet-api"},
+    {"source": "couple-pet-database", "target": "couple-pet-pet-mechanics"},
+    {"source": "couple-pet-api", "target": "couple-pet-pet-mechanics"},
+    {"source": "couple-pet-api", "target": "couple-pet-frontend"},
+    {"source": "couple-pet-frontend", "target": "couple-pet-pet-mechanics"}
+  ]
+}
