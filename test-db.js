@@ -1,5 +1,8 @@
 // 测试数据库连接 - 请替换 DATABASE_URL 环境变量
+const dns = require('dns');
 const { Pool } = require('pg');
+// 强制 IPv4 优先，解决连不上 Supabase 的问题
+dns.setDefaultResultOrder('ipv4first');
 
 const url = process.env.DATABASE_URL;
 if (!url) {

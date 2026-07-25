@@ -208,6 +208,12 @@ html, body {
   background: #D1D5DB;
 }
 
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .top-btn {
   width: 40px;
   height: 40px;
@@ -305,6 +311,19 @@ html, body {
 }
 .stat-fill.energy {
   background: linear-gradient(90deg, var(--purple-100), var(--purple-300));
+}
+
+.stat-fill.stat-warning {
+  background: linear-gradient(90deg, #FCD34D, #F59E0B) !important;
+}
+.stat-fill.stat-critical {
+  background: linear-gradient(90deg, #F87171, #EF4444) !important;
+  animation: pulse-bar 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-bar {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 .stat-value {
@@ -413,6 +432,69 @@ html, body {
   font-size: 14px;
 }
 
+/* ========== 设置页 ========== */
+.settings-container {
+  flex: 1;
+  padding: 16px 20px;
+  max-width: 420px;
+  margin: 0 auto;
+  width: 100%;
+  overflow-y: auto;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.settings-back {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: var(--pink-400);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+.settings-back:active {
+  background: var(--pink-50);
+}
+
+.settings-title {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.settings-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.settings-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  color: var(--text);
+}
+
+.input-label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.settings-btn {
+  margin-top: 4px;
+}
+
 /* ========== 响应式 ========== */
 @media (max-width: 400px) {
   .login-container {
@@ -429,6 +511,38 @@ html, body {
     gap: 8px;
     padding: 8px 12px;
   }
+}
+
+/* ========== Toast 提示 ========== */
+.toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(45, 27, 46, 0.88);
+  backdrop-filter: blur(12px);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 24px;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 9999;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  white-space: nowrap;
+  max-width: 90vw;
+  text-align: center;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.toast.error {
+  background: rgba(220, 50, 50, 0.9);
+}
+.toast.success {
+  background: rgba(45, 180, 100, 0.9);
 }
 
 /* ========== 粒子 ========== */

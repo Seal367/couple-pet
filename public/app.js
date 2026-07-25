@@ -12,12 +12,17 @@ const API = {
   sleep: '/api/pet/sleep',
   interactions: '/api/interactions',
   partner: '/api/partner',
+  updateDisplayName: '/api/me/display-name',
+  updatePassword: '/api/me/password',
+  updatePetName: '/api/pet/name',
 };
 
 let petState = null;
 let myName = '';
 let isSleeping = false;
 let actionCooldown = false;
+let lastInteractionTimestamp = null;
+let iJustInteracted = false;
 
 // ========== 页面切换 ==========
 function showPage(id) {
@@ -46,14 +51,130 @@ function showLink(code) {
   document.getElementById('loginForm').style.display = 'none';
   document.getElementById('registerForm').style.display = 'none';
   document.getElementById('linkForm').style.display = 'block';
-  document.getElementById('coupleCodeDisplay').textContent = code || '------';
-  if (code) {
-    document.getElementById('linkCode').placeholder = '输入伴侣码';
+  savedCoupleCode = code || savedCoupleCode || '';
+  document.getElementById('coupleCodeDisplay').textContent = savedCoupleCode || '------';
+  if (savedCoupleCode) {
+    document.getElementById('linkCode').placeholder = '输入 TA 的 6 位伴侣码';
   }
 }
 
-function enterDashboard() {
+async function apiPut(url, data) {
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    credentials: 'same-origin',
+  });
+  return res.json();
+}
+
+// ========== 设置页 ==========
+function showSettings() {
+  stopDashboardLoop();
+  if (petAnimFrame) { cancelAnimationFrame(petAnimFrame); petAnimFrame = null; }
+  showPage('settingsPage');
+
+  // 预填当前值
+  apiGet(API.me).then(result => {
+    if (result.user) {
+      document.getElementById('settingsDisplayName').value = result.user.name || '';
+    }
+  });
+  apiGet(API.pet).then(result => {
+    if (result.name) {
+      document.getElementById('settingsPetName').value = result.name;
+    }
+  }).catch(() => {});
+}
+
+function goToDashboard() {
   showPage('dashboardPage');
+  initPetCanvas();
+  startDashboardLoop();
+}
+
+async function handleSaveDisplayName() {
+  const name = document.getElementById('settingsDisplayName').value.trim();
+  if (!name) { showMessage('显示名称不能为空', 'error'); return; }
+
+  const result = await apiPut(API.updateDisplayName, { displayName: name });
+  if (result.success) {
+    myName = name;
+    showMessage('名称已更新 ✨', 'success');
+  } else {
+    showMessage(result.error || '保存失败', 'error');
+  }
+}
+
+async function handleSavePassword() {
+  const currentPw = document.getElementById('settingsCurrentPw').value;
+  const newPw = document.getElementById('settingsNewPw').value;
+  const confirmPw = document.getElementById('settingsConfirmPw').value;
+
+  if (!currentPw || !newPw || !confirmPw) {
+    showMessage('请填写所有密码字段', 'error'); return;
+  }
+  if (newPw.length < 4) {
+    showMessage('新密码至少 4 位', 'error'); return;
+  }
+  if (newPw !== confirmPw) {
+    showMessage('两次新密码不一致', 'error'); return;
+  }
+
+  const result = await apiPut(API.updatePassword, { currentPassword: currentPw, newPassword: newPw });
+  if (result.success) {
+    showMessage('密码已修改 🔒', 'success');
+    document.getElementById('settingsCurrentPw').value = '';
+    document.getElementById('settingsNewPw').value = '';
+    document.getElementById('settingsConfirmPw').value = '';
+  } else {
+    showMessage(result.error || '修改失败', 'error');
+  }
+}
+
+async function handleSavePetName() {
+  const name = document.getElementById('settingsPetName').value.trim();
+  if (!name) { showMessage('宠物名字不能为空', 'error'); return; }
+
+  const result = await apiPut(API.updatePetName, { name });
+  if (result.success) {
+    petState.name = name;
+    showMessage('宠物名字已更新 🐾', 'success');
+  } else {
+    showMessage(result.error || '保存失败', 'error');
+  }
+}
+
+async function enterDashboard() {
+  showPage('dashboardPage');
+  // 检查是否需要显示连接按钮
+  updateLinkButton();
+}
+
+async function updateLinkButton() {
+  try {
+    const result = await apiGet(API.me);
+    const linkBtn = document.getElementById('linkBtn');
+    if (result.user && result.user.member_count < 2) {
+      if (linkBtn) linkBtn.style.display = 'flex';
+    } else {
+      if (linkBtn) linkBtn.style.display = 'none';
+    }
+    return result.user;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 从面板跳转到伴侣连接页
+let savedCoupleCode = '';
+async function goToLinkPage() {
+  // 获取最新的伴侣码
+  try {
+    const result = await apiGet(API.me);
+    savedCoupleCode = result.user?.couple_code || savedCoupleCode;
+  } catch (e) { /* ignore */ }
+  showLink(savedCoupleCode);
 }
 
 // ========== API 请求 ==========
@@ -91,9 +212,14 @@ async function handleLogin() {
 
   if (result.success) {
     myName = result.user.name;
-    await loadDashboard();
+    if (result.memberCount < 2) {
+      // 还没连接伴侣，显示连接页面
+      showLink(result.coupleCode || '');
+    } else {
+      await loadDashboard();
+    }
   } else {
-    showMessage(result.error || '登录失败');
+    showMessage(result.error || '登录失败', 'error');
   }
 }
 
@@ -116,7 +242,7 @@ async function handleRegister() {
     myName = result.user.name;
     showLink(result.coupleCode);
   } else {
-    showMessage(result.error || '注册失败');
+    showMessage(result.error || '注册失败', 'error');
   }
 }
 
@@ -129,16 +255,17 @@ async function handleLink() {
 
   const result = await apiPost(API.link, { code });
   if (result.success) {
-    showMessage('💕 连接成功！');
+    showMessage('💕 连接成功！', 'success');
     await loadDashboard();
   } else {
-    showMessage(result.error || '连接失败');
+    showMessage(result.error || '连接失败', 'error');
   }
 }
 
 async function handleLogout() {
   await apiPost(API.logout, {});
   petState = null;
+  if (petAnimFrame) { cancelAnimationFrame(petAnimFrame); petAnimFrame = null; }
   stopDashboardLoop();
 
   // 重置表单
@@ -151,6 +278,8 @@ async function handleLogout() {
 // ========== 加载面板 ==========
 async function loadDashboard() {
   showPage('dashboardPage');
+  // 刷新连接按钮状态
+  await updateLinkButton();
 }
 
 // ========== 宠物 Canvas 绘制 ==========
@@ -174,6 +303,10 @@ function initPetCanvas() {
   petCanvas.addEventListener('click', () => {
     if (!actionCooldown) doAction('pet');
   });
+
+  // 启动动画循环
+  if (petAnimFrame) cancelAnimationFrame(petAnimFrame);
+  animatePet();
 }
 
 function resizePetCanvas() {
@@ -208,13 +341,14 @@ function initLoginCanvas() {
     const time = Date.now() * 0.001;
     const floatY = Math.sin(time * 2) * 3;
 
-    drawPetBody(ctx, w / 2, h / 2 + floatY, 55, time);
+    drawPetBody(ctx, w / 2, h / 2 + floatY, 55, time, 'normal', 0);
     requestAnimationFrame(drawLoginPet);
   }
   drawLoginPet();
 }
 
-function drawPetBody(ctx, cx, cy, size, time, expression) {
+function drawPetBody(ctx, cx, cy, size, time, expression, healthLevel) {
+  healthLevel = healthLevel || 0;
   const floatY = Math.sin(time * 2) * 4;
   const bounce = expression === 'happy' ? Math.abs(Math.sin(time * 6)) * 8 : 0;
   const squish = expression === 'happy'
@@ -233,12 +367,27 @@ function drawPetBody(ctx, cx, cy, size, time, expression) {
   ctx.fillStyle = 'rgba(0,0,0,0.06)';
   ctx.fill();
 
-  // 身体
+  // 身体 — 根据健康状态调整颜色
   const gradient = ctx.createRadialGradient(-size * 0.25, -size * 0.3, size * 0.1, 0, 0, size);
-  gradient.addColorStop(0, '#FFF5F7');
-  gradient.addColorStop(0.4, '#FFDEE5');
-  gradient.addColorStop(0.8, '#FFB8C9');
-  gradient.addColorStop(1, '#FF8EAB');
+  if (healthLevel >= 2) {
+    // 危险：灰紫色调
+    gradient.addColorStop(0, '#F0E6F0');
+    gradient.addColorStop(0.4, '#D8C8D8');
+    gradient.addColorStop(0.8, '#B8A0B8');
+    gradient.addColorStop(1, '#988098');
+  } else if (healthLevel >= 1) {
+    // 警告：淡黄粉色
+    gradient.addColorStop(0, '#FFF8F0');
+    gradient.addColorStop(0.4, '#FFE8D0');
+    gradient.addColorStop(0.8, '#FFC8A8');
+    gradient.addColorStop(1, '#FFA880');
+  } else {
+    // 正常：粉色
+    gradient.addColorStop(0, '#FFF5F7');
+    gradient.addColorStop(0.4, '#FFDEE5');
+    gradient.addColorStop(0.8, '#FFB8C9');
+    gradient.addColorStop(1, '#FF8EAB');
+  }
 
   ctx.beginPath();
   ctx.ellipse(0, 0, size, size * 1.08, 0, 0, Math.PI * 2);
@@ -392,7 +541,36 @@ function drawPet(ctx, time) {
 
   // 画宠物
   const size = Math.min(w, h) * 0.22;
-  drawPetBody(ctx, w / 2, h * 0.52, size, time, expr);
+  const healthLevel = getPetHealthLevel();
+
+  // 危险状态：画面微微抖动
+  let shakeX = 0, shakeY = 0;
+  if (healthLevel >= 2) {
+    shakeX = Math.sin(time * 15) * 3;
+    shakeY = Math.cos(time * 13) * 2;
+  }
+
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+  drawPetBody(ctx, w / 2, h * 0.52, size, time, expr, healthLevel);
+  ctx.restore();
+
+  // 危险警告图标
+  if (healthLevel >= 2) {
+    ctx.save();
+    ctx.font = '22px sans-serif';
+    ctx.textAlign = 'center';
+    const warnY = h * 0.1 + Math.sin(time * 3) * 3;
+    ctx.fillText('⚠️ 泡泡生病了', w / 2, warnY);
+    ctx.restore();
+  } else if (healthLevel >= 1) {
+    ctx.save();
+    ctx.font = '15px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.7)';
+    ctx.fillText('🩹 泡泡不太舒服', w / 2, h * 0.12);
+    ctx.restore();
+  }
 
   // 画粒子（心、星星）
   drawParticles(ctx, time);
@@ -477,10 +655,10 @@ function startDashboardLoop() {
 
   // 每 3 秒刷新宠物状态
   dashboardInterval = setInterval(refreshPetState, 3000);
-  // 每 10 秒检查伴侣在线状态
-  partnerCheckInterval = setInterval(checkPartnerStatus, 10000);
-  // 每 15 秒刷新互动记录
-  setInterval(refreshInteractions, 15000);
+  // 每 5 秒检查伴侣在线状态
+  partnerCheckInterval = setInterval(checkPartnerStatus, 5000);
+  // 每 5 秒刷新互动记录
+  setInterval(refreshInteractions, 5000);
 }
 
 function stopDashboardLoop() {
@@ -508,10 +686,13 @@ async function refreshPetState() {
     // 更新 UI
     document.getElementById('hungerFill').style.width = result.hunger + '%';
     document.getElementById('hungerValue').textContent = result.hunger;
+    updateStatBarColor('hungerFill', result.hunger);
     document.getElementById('happyFill').style.width = result.happiness + '%';
     document.getElementById('happinessValue').textContent = result.happiness;
+    updateStatBarColor('happyFill', result.happiness);
     document.getElementById('energyFill').style.width = result.energy + '%';
     document.getElementById('energyValue').textContent = result.energy;
+    updateStatBarColor('energyFill', result.energy);
 
     // 睡觉按钮状态
     const sleepBtn = document.getElementById('sleepBtn');
@@ -522,6 +703,28 @@ async function refreshPetState() {
       sleepBtn.querySelector('.action-icon').textContent = '😴';
       sleepBtn.querySelector('.action-label').textContent = '睡觉';
     }
+
+    // 检测伴侣互动（lastInteractionAt 变化且不是自己操作的）
+    if (result.lastInteractionAt && lastInteractionTimestamp &&
+        result.lastInteractionAt !== lastInteractionTimestamp && !iJustInteracted) {
+      // 伴侣刚刚互动了！
+      setExpression('happy', 120);
+      // 获取最新的互动来显示谁做了什么
+      try {
+        const interactions = await apiGet(API.interactions);
+        if (Array.isArray(interactions) && interactions.length > 0) {
+          const latest = interactions[0];
+          if (latest.user_name !== myName) {
+            const actionLabels = { feed: '喂了', pet: '摸了摸', play: '和', sleep: '让', wake: '叫醒了' };
+            const actionEmoji = { feed: '🍼', pet: '🤚💕', play: '🎾', sleep: '😴', wake: '🌞' };
+            showMessage(`${actionEmoji[latest.action] || '💕'} ${latest.user_name} ${actionLabels[latest.action] || ''}泡泡`, 'success');
+            spawnParticles(canvasW / 2, canvasH * 0.35, 6, ['💕', '✨', '💖']);
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+    lastInteractionTimestamp = result.lastInteractionAt || lastInteractionTimestamp;
+    iJustInteracted = false;
 
     // 如果睡眠状态变化，触发事件
     if (wasSleeping !== undefined && wasSleeping !== result.is_sleeping) {
@@ -582,6 +785,8 @@ async function refreshInteractions() {
   }
 }
 
+let partnerWasOnline = null;
+
 async function checkPartnerStatus() {
   try {
     const result = await apiGet(API.partner);
@@ -592,13 +797,19 @@ async function checkPartnerStatus() {
       if (result.online) {
         dot.className = 'status-dot online';
         nameEl.textContent = `${result.name} 在线 💕`;
+        if (partnerWasOnline === false) {
+          showMessage(`${result.name} 上线了 💕`, 'success');
+          spawnParticles(canvasW / 2, canvasH * 0.3, 5, ['💕', '✨']);
+        }
       } else {
         dot.className = 'status-dot offline';
         nameEl.textContent = result.name;
       }
+      partnerWasOnline = result.online;
     } else {
       dot.className = 'status-dot offline';
       nameEl.textContent = '等待连接';
+      partnerWasOnline = null;
     }
   } catch (e) {
     // 静默处理
@@ -620,6 +831,8 @@ async function doAction(action) {
   try {
     const result = await apiPost(urlMap[action], {});
     if (result.success) {
+      // 标记自己刚才互动了，避免误判为伴侣互动
+      iJustInteracted = true;
       // 立即刷新状态
       await refreshPetState();
 
@@ -663,7 +876,40 @@ function setExpression(expr, duration) {
 }
 
 // ========== 消息提示 ==========
-function showMessage(text) {
+function showMessage(text, type) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'toast ' + (type || '');
+  // 强制回流后添加 show
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(el._hideTimer);
+  el._hideTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+function updateStatBarColor(fillId, value) {
+  const el = document.getElementById(fillId);
+  if (!el) return;
+  el.classList.remove('stat-critical', 'stat-warning');
+  if (value < 25) {
+    el.classList.add('stat-critical');
+  } else if (value < 50) {
+    el.classList.add('stat-warning');
+  }
+}
+
+// 获取宠物健康状态等级：0=正常, 1=警告, 2=危险
+function getPetHealthLevel() {
+  if (!petState) return 0;
+  const min = Math.min(petState.hunger, petState.happiness, petState.energy);
+  if (min < 15) return 2;
+  if (min < 30) return 1;
+  return 0;
+}
+
+// 面板内的浮动消息（宠物互动等）
+function showActionMessage(text) {
   const el = document.getElementById('actionMessage');
   if (!el) return;
   el.textContent = text;
@@ -671,7 +917,6 @@ function showMessage(text) {
   clearTimeout(el._hideTimer);
   el._hideTimer = setTimeout(() => el.classList.remove('show'), 2000);
 }
-const showActionMessage = showMessage;
 
 // ========== 键盘支持 ==========
 document.addEventListener('keydown', (e) => {
@@ -699,12 +944,9 @@ async function init() {
       myName = result.user.name;
       // 检查是否已连接伴侣
       if (result.user.member_count < 2) {
-        // 未连接伴侣，显示连接页面
+        // 未连接伴侣，显示连接页面（带伴侣码）
         showPage('loginPage');
-        showLink('');
-        // 重新获取伴侣码
-        // 简单起见：直接进面板
-        enterDashboard();
+        showLink(result.user.couple_code || '');
       } else {
         enterDashboard();
       }

@@ -67,7 +67,11 @@
           <span id="partnerNameText">等待连接</span>
         </span>
       </div>
-      <button class="top-btn" onclick="handleLogout()" title="退出登录">🚪</button>
+      <div class="top-right">
+        <button class="top-btn" id="linkBtn" onclick="goToLinkPage()" title="连接伴侣" style="display:none">💞</button>
+        <button class="top-btn" onclick="showSettings()" title="设置">⚙️</button>
+        <button class="top-btn" onclick="handleLogout()" title="退出登录">🚪</button>
+      </div>
     </div>
 
     <!-- 宠物画布 -->
@@ -131,6 +135,54 @@
       </div>
     </div>
   </div>
+
+  <!-- ========== 设置页面 ========== -->
+  <div id="settingsPage" class="page">
+    <div class="settings-container">
+      <div class="settings-header">
+        <button class="settings-back" onclick="goToDashboard()">← 返回</button>
+        <h2 class="settings-title">⚙️ 设置</h2>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">👤 我的信息</div>
+        <div class="input-group">
+          <label class="input-label">显示名称</label>
+          <input type="text" id="settingsDisplayName" placeholder="你的称呼" maxlength="20">
+        </div>
+        <button class="btn primary settings-btn" onclick="handleSaveDisplayName()">保存名称</button>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">🔒 修改密码</div>
+        <div class="input-group">
+          <label class="input-label">当前密码</label>
+          <input type="password" id="settingsCurrentPw" placeholder="输入当前密码" maxlength="50">
+        </div>
+        <div class="input-group">
+          <label class="input-label">新密码</label>
+          <input type="password" id="settingsNewPw" placeholder="新密码（至少 4 位）" maxlength="50">
+        </div>
+        <div class="input-group">
+          <label class="input-label">确认新密码</label>
+          <input type="password" id="settingsConfirmPw" placeholder="再次输入新密码" maxlength="50">
+        </div>
+        <button class="btn primary settings-btn" onclick="handleSavePassword()">修改密码</button>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">🐾 宠物设置</div>
+        <div class="input-group">
+          <label class="input-label">宠物名字</label>
+          <input type="text" id="settingsPetName" placeholder="给宠物起个名字" maxlength="20">
+        </div>
+        <button class="btn primary settings-btn" onclick="handleSavePetName()">保存名字</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 全局 Toast 提示 -->
+  <div id="toast" class="toast"></div>
 
   <script src="app.js"></script>
 </body>

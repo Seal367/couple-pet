@@ -1,21 +1,18 @@
 const express = require('express');
 const session = require('express-session');
-const PgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcryptjs');
-const { Pool } = require('pg');
-const path = require('path');
 const crypto = require('crypto');
+const path = require('path');
+
+const { getPool, getDbType, initDB } = require('./db');
+const { createSessionStore } = require('./session-store');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ========== 数据库连接 ==========
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production'
-    ? { rejectUnauthorized: false }
-    : false,
-});
+const pool = getPool();
+const dbType = getDbType();
 
 // ========== 中间件 ==========
 app.use(express.json());
@@ -23,10 +20,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // 会话管理
 app.use(session({
-  store: new PgSession({
-    pool,
-    tableName: 'user_sessions',
-  }),
+  store: createSessionStore(pool, dbType),
   secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
   resave: false,
   saveUninitialized: false,
@@ -38,64 +32,8 @@ app.use(session({
   },
 }));
 
-// ========== 数据库初始化 ==========
-async function initDB() {
-  const client = await pool.connect();
-  try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS couples (
-        id SERIAL PRIMARY KEY,
-        code VARCHAR(6) UNIQUE NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        display_name VARCHAR(50) NOT NULL DEFAULT '',
-        couple_id INTEGER REFERENCES couples(id),
-        is_online BOOLEAN DEFAULT FALSE,
-        last_active TIMESTAMP DEFAULT NOW(),
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS pets (
-        id SERIAL PRIMARY KEY,
-        couple_id INTEGER UNIQUE NOT NULL REFERENCES couples(id),
-        name VARCHAR(50) DEFAULT '泡泡',
-        happiness REAL DEFAULT 70.0,
-        hunger REAL DEFAULT 70.0,
-        energy REAL DEFAULT 70.0,
-        is_sleeping BOOLEAN DEFAULT FALSE,
-        last_interaction_at TIMESTAMP DEFAULT NOW(),
-        last_stats_update TIMESTAMP DEFAULT NOW(),
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS interactions (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id),
-        couple_id INTEGER NOT NULL REFERENCES couples(id),
-        user_name VARCHAR(50) NOT NULL,
-        action VARCHAR(20) NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS user_sessions (
-        sid VARCHAR NOT NULL PRIMARY KEY,
-        sess JSON NOT NULL,
-        expire TIMESTAMP(6) NOT NULL
-      );
-    `);
-    console.log('✅ 数据库初始化完成');
-  } catch (err) {
-    console.error('❌ 数据库初始化失败:', err.message);
-    throw err;
-  } finally {
-    client.release();
-  }
-}
+// ========== 数据库初始化（委托给 db.js） ==========
+// initDB() is imported from ./db.js
 
 // ========== 认证中间件 ==========
 function requireAuth(req, res, next) {
@@ -134,12 +72,15 @@ async function updatePetStats(coupleId) {
 
   if (minutesPassed < 1) return; // 太频繁不衰减
 
-  // 每 5 分钟衰减系数
-  const hungerDecay = minutesPassed * 0.25;
-  const happyDecay = minutesPassed * 0.18;
+  // 衰减速率（每分钟）
+  // 饱腹：~24 小时从 70 降到 0（无人喂食）
+  // 开心：~30 小时从 70 降到 0（无人互动）
+  // 精力：~20 小时从 70 降到 0（不睡觉），睡觉时 ~7 小时从 0 回到 100
+  const hungerDecay = minutesPassed * 0.05;
+  const happyDecay = minutesPassed * 0.04;
   const energyChange = p.is_sleeping
-    ? -minutesPassed * 0.4   // 睡觉恢复精力
-    : minutesPassed * 0.22;   // 醒着消耗
+    ? -minutesPassed * 0.25   // 睡觉恢复精力
+    : minutesPassed * 0.06;   // 醒着消耗
 
   await pool.query(
     `UPDATE pets SET
@@ -227,7 +168,12 @@ app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     const result = await pool.query(
-      'SELECT id, password_hash, display_name, couple_id FROM users WHERE username = $1',
+      `SELECT u.id, u.password_hash, u.display_name, u.couple_id,
+        c.code as couple_code,
+        (SELECT COUNT(*) FROM users WHERE couple_id = u.couple_id)::int as member_count
+      FROM users u
+      JOIN couples c ON c.id = u.couple_id
+      WHERE u.username = $1`,
       [username]
     );
 
@@ -250,6 +196,8 @@ app.post('/api/login', async (req, res) => {
     res.json({
       success: true,
       user: { id: user.id, name: user.display_name },
+      coupleCode: user.couple_code,
+      memberCount: user.member_count,
     });
   } catch (err) {
     console.error('登录失败:', err);
@@ -321,9 +269,12 @@ app.get('/api/me', async (req, res) => {
 
     const result = await pool.query(
       `SELECT u.id, u.display_name as name, u.couple_id,
+        c.code as couple_code,
         (SELECT display_name FROM users WHERE couple_id = u.couple_id AND id != u.id LIMIT 1) as partner_name,
         (SELECT COUNT(*) FROM users WHERE couple_id = u.couple_id)::int as member_count
-      FROM users u WHERE u.id = $1`,
+      FROM users u
+      JOIN couples c ON c.id = u.couple_id
+      WHERE u.id = $1`,
       [req.session.userId]
     );
 
@@ -463,8 +414,7 @@ app.get('/api/interactions', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT user_name, action,
-        to_char(created_at, 'HH24:MI') as time,
-        (created_at + INTERVAL '8 hours') as local_time
+        to_char(created_at, 'HH24:MI') as time
       FROM interactions
       WHERE couple_id = $1
       ORDER BY created_at DESC LIMIT 30`,
@@ -506,18 +456,114 @@ app.get('/api/partner', requireAuth, async (req, res) => {
   }
 });
 
+// ========== ⚙️ 设置接口 ==========
+
+// 修改显示名称
+app.put('/api/me/display-name', requireAuth, async (req, res) => {
+  try {
+    const { displayName } = req.body;
+    if (!displayName || !displayName.trim()) {
+      return res.status(400).json({ error: '显示名称不能为空' });
+    }
+    if (displayName.length > 20) {
+      return res.status(400).json({ error: '显示名称最多 20 个字符' });
+    }
+
+    await pool.query(
+      'UPDATE users SET display_name = $1 WHERE id = $2',
+      [displayName.trim(), req.session.userId]
+    );
+
+    res.json({ success: true, message: '名称已更新' });
+  } catch (err) {
+    console.error('更新显示名称失败:', err);
+    res.status(500).json({ error: '保存失败，稍后再试~' });
+  }
+});
+
+// 修改密码
+app.put('/api/me/password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: '请填写当前密码和新密码' });
+    }
+    if (newPassword.length < 4) {
+      return res.status(400).json({ error: '新密码至少 4 位' });
+    }
+
+    // 验证当前密码
+    const user = await pool.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [req.session.userId]
+    );
+    if (user.rows.length === 0) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const match = await bcrypt.compare(currentPassword, user.rows[0].password_hash);
+    if (!match) {
+      return res.status(400).json({ error: '当前密码不正确' });
+    }
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    await pool.query(
+      'UPDATE users SET password_hash = $1 WHERE id = $2',
+      [hash, req.session.userId]
+    );
+
+    res.json({ success: true, message: '密码已修改' });
+  } catch (err) {
+    console.error('修改密码失败:', err);
+    res.status(500).json({ error: '修改失败，稍后再试~' });
+  }
+});
+
+// 修改宠物名字
+app.put('/api/pet/name', requireAuth, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: '宠物名字不能为空' });
+    }
+    if (name.length > 20) {
+      return res.status(400).json({ error: '宠物名字最多 20 个字符' });
+    }
+
+    await pool.query(
+      'UPDATE pets SET name = $1 WHERE couple_id = $2',
+      [name.trim(), req.session.coupleId]
+    );
+
+    res.json({ success: true, message: '宠物名字已更新' });
+  } catch (err) {
+    console.error('更新宠物名字失败:', err);
+    res.status(500).json({ error: '保存失败，稍后再试~' });
+  }
+});
+
 // ========== 🚀 启动 ==========
 
 async function start() {
   try {
     await initDB();
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`\n🌟 电子宠物服务器启动成功！`);
       console.log(`  地址: http://localhost:${PORT}`);
       console.log(`  模式: ${process.env.NODE_ENV || 'development'}\n`);
     });
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`\n❌ 端口 ${PORT} 已被占用，请先关闭占用该端口的程序`);
+        console.error(`   查看占用: netstat -ano | findstr :${PORT}`);
+        console.error(`   或使用其他端口: set PORT=3001 && npm start\n`);
+      } else {
+        console.error('❌ 服务器启动失败:', err.message);
+      }
+      process.exit(1);
+    });
   } catch (err) {
-    console.error('❌ 服务器启动失败:', err.message);
+    console.error('❌ 数据库初始化失败:', err.message);
     process.exit(1);
   }
 }
