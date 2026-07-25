@@ -8,6 +8,34 @@ const dns = require('dns');
 // 强制 IPv4 优先，解决 Vercel 环境连不上 Supabase 的问题
 dns.setDefaultResultOrder('ipv4first');
 
+// Vercel 环境使用公共 DNS 解析 Supabase 主机名
+if (process.env.VERCEL) {
+  const { Resolver } = dns;
+  const resolver = new Resolver();
+  resolver.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+
+  const originalLookup = dns.lookup;
+  dns.lookup = function (hostname, options, callback) {
+    // 只对 Supabase 主机名使用自定义 DNS
+    if (typeof hostname === 'string' && hostname.includes('supabase.co')) {
+      if (typeof options === 'function') { callback = options; options = {}; }
+      options = options || {};
+      const family = options.family || 4;
+      if (family === 4 || family === 0) {
+        return resolver.resolve4(hostname, (err, addresses) => {
+          if (err) {
+            // 回退到系统 DNS
+            return originalLookup.call(dns, hostname, options, callback);
+          }
+          callback(null, addresses[0], 4);
+        });
+      }
+    }
+    return originalLookup.call(dns, hostname, options, callback);
+  };
+  console.log('[Vercel] Custom DNS resolver enabled for supabase.co');
+}
+
 const { getPool, getDbType, initDB } = require('../db');
 const { createSessionStore } = require('../session-store');
 
